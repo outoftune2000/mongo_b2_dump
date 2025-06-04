@@ -136,7 +136,7 @@ class ChunkingTransform extends Transform {
   }
 
   private getChunkPath(): string {
-    return path.join(this.outputDir, `${this.baseName}.part${this.currentChunk}`);
+    return path.join(this.outputDir, `${this.baseName}.jsonl.part${this.currentChunk}`);
   }
 
   getChunkPaths(): string[] {

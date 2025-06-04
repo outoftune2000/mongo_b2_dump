@@ -94,7 +94,8 @@ export class BackupService {
             // Upload each chunk
             for (const chunkPath of chunkPaths) {
               const chunkName = path.basename(chunkPath);
-              const remotePath = path.join(path.basename(file.name, '.bson'), chunkName);
+              const baseName = path.basename(file.name, '.bson');
+              const remotePath = path.join(baseName, `${baseName}.jsonl.part${path.basename(chunkPath).split('.').pop()}`);
               await this.b2Service.uploadFile(chunkPath, remotePath);
               logger.info('Successfully uploaded JSONL chunk to B2', {
                 chunkName,
