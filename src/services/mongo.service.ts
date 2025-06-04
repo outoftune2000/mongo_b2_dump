@@ -24,9 +24,9 @@ export class MongoService {
 
   async createDump(): Promise<string> {
     try {
-      // Create a unique filename based on timestamp
+      // Create a unique directory name based on timestamp
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const outputFile = `${timestamp}.bson`;
+      const outputDir = `${this.outputDir}/${timestamp}`;
 
       // Construct the mongodump command with authentication
       const command = `docker exec ${this.containerName} mongodump --uri="${this.mongoUri}" --out=/dump --authenticationDatabase=admin`;
@@ -35,7 +35,7 @@ export class MongoService {
       await execAsync(command);
 
       // Copy the dump from the container to the host
-      const copyCommand = `docker cp ${this.containerName}:/dump ${this.outputDir}`;
+      const copyCommand = `docker cp ${this.containerName}:/dump ${outputDir}`;
       await execAsync(copyCommand);
 
       // Clean up the dump in the container
@@ -65,11 +65,11 @@ export class MongoService {
 
       logger.info('Successfully created MongoDB dump', {
         container: this.containerName,
-        outputDir: this.outputDir,
+        outputDir,
         uri: this.mongoUri.replace(/\/\/[^:]+:[^@]+@/, '//****:****@') // Hide credentials in logs
       });
 
-      return outputFile;
+      return outputDir;
     } catch (error) {
       logger.error('Failed to create MongoDB dump', { 
         error,
