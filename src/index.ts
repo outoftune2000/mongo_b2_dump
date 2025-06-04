@@ -40,17 +40,21 @@ async function performBackup(
 async function main() {
   // Initialize services
   const mongoService = new MongoService(
-    process.env.MONGO_CONTAINER_NAME || 'mongo',
-    process.env.MONGO_URI || 'mongodb://localhost:27017',
-    process.env.BACKUP_PATH || '/backup'
+    process.env.MONGO_CONTAINER_NAME || '',
+    process.env.MONGO_URI || '',
+    process.env.BACKUP_PATH || ''
   );
 
-  const b2Service = new B2Service();
+  const b2Service = new B2Service(
+    process.env.B2_KEY_ID || '',
+    process.env.B2_KEY || '',
+    process.env.B2_BUCKET_ID || ''
+  );
 
   const backupService = new BackupService(
     mongoService,
     b2Service,
-    process.env.BACKUP_PATH || '/backup'
+    process.env.BACKUP_PATH || ''
   );
 
   // Handle graceful shutdown

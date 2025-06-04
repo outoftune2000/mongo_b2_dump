@@ -78,10 +78,18 @@ export class B2Service {
   private readonly maxRetries: number = 3;
   private readonly retryDelay: number = 1000;
 
-  constructor() {
-    this.applicationKeyId = process.env.B2_KEY_ID || '';
-    this.applicationKey = process.env.B2_KEY || '';
-    this.bucketId = process.env.B2_BUCKET_ID || '';
+  constructor(
+    applicationKeyId: string,
+    applicationKey: string,
+    bucketId: string,
+    maxRetries: number = 3,
+    retryDelay: number = 1000
+  ) {
+    this.applicationKeyId = applicationKeyId;
+    this.applicationKey = applicationKey;
+    this.bucketId = bucketId;
+    this.maxRetries = maxRetries;
+    this.retryDelay = retryDelay;
 
     // Debug logging in constructor
     logger.info('B2Service initialized with:', {

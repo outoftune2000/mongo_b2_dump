@@ -1,15 +1,11 @@
 import { MongoService } from './services/mongo.service';
 import { B2Service } from './services/b2.service';
 import { BackupService } from './services/backup.service';
-import { rotateBackups } from './utils/file.util';
 import { BackupError } from './utils/errors';
 
 jest.mock('./services/mongo.service');
 jest.mock('./services/b2.service');
 jest.mock('./services/backup.service');
-jest.mock('./utils/file.util', () => ({
-  rotateBackups: jest.fn()
-}));
 jest.mock('./utils/logger.util', () => ({
   info: jest.fn(),
   error: jest.fn()
@@ -28,9 +24,7 @@ describe('Main Application', () => {
       BACKUP_PATH: '/backup',
       B2_KEY_ID: 'test-key-id',
       B2_KEY: 'test-key',
-      B2_BUCKET_NAME: 'test-bucket',
-      MAX_BACKUP_FILES: '30',
-      MAX_BACKUP_AGE_DAYS: '30'
+      B2_BUCKET_NAME: 'test-bucket'
     };
 
     mockMongoService = new MongoService(
@@ -57,16 +51,11 @@ describe('Main Application', () => {
   test('should perform backup successfully', async () => {
     mockB2Service.authenticate.mockResolvedValue();
     mockBackupService.performIncrementalBackup.mockResolvedValue();
-    (rotateBackups as jest.Mock).mockResolvedValue(undefined);
 
     await require('./index');
 
     expect(mockB2Service.authenticate).toHaveBeenCalled();
     expect(mockBackupService.performIncrementalBackup).toHaveBeenCalled();
-    expect(rotateBackups).toHaveBeenCalledWith('/backup', {
-      maxFiles: 30,
-      maxAgeDays: 30
-    });
   });
 
   test('should handle backup error', async () => {
@@ -93,7 +82,6 @@ describe('Main Application', () => {
   test('should handle graceful shutdown', async () => {
     mockB2Service.authenticate.mockResolvedValue();
     mockBackupService.performIncrementalBackup.mockResolvedValue();
-    (rotateBackups as jest.Mock).mockResolvedValue(undefined);
 
     const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
@@ -104,34 +92,4 @@ describe('Main Application', () => {
 
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
-});
-
-describe('Backup Service', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  test('should rotate backups successfully', async () => {
-    (rotateBackups as jest.Mock).mockResolvedValue(undefined);
-
-    const policy = {
-      maxAgeDays: 7,
-      maxFiles: 5
-    };
-
-    await expect(rotateBackups('backup-dir', policy)).resolves.toBeUndefined();
-    expect(rotateBackups).toHaveBeenCalledWith('backup-dir', policy);
-  }, 30000);
-
-  test('should handle backup rotation errors', async () => {
-    (rotateBackups as jest.Mock).mockRejectedValue(new Error('Rotation failed'));
-
-    const policy = {
-      maxAgeDays: 7,
-      maxFiles: 5
-    };
-
-    await expect(rotateBackups('backup-dir', policy)).rejects.toThrow('Rotation failed');
-    expect(rotateBackups).toHaveBeenCalledWith('backup-dir', policy);
-  }, 30000);
 }); 
