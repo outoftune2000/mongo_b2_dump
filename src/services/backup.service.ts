@@ -110,23 +110,34 @@ export class BackupService {
 
   private async getLocalFiles(): Promise<LocalFile[]> {
     try {
-      const files = await readdir(this.dumpPath);
       const localFiles: LocalFile[] = [];
-
-      for (const file of files) {
-        if (!file.endsWith('.bson')) continue;
-
-        const filePath = path.join(this.dumpPath, file);
-        const stats = await stat(filePath);
+      
+      async function scanDirectory(dirPath: string) {
+        const entries = await readdir(dirPath, { withFileTypes: true });
         
-        localFiles.push({
-          name: file,
-          path: filePath,
-          size: stats.size,
-          checksum: await calculateChecksum(filePath),
-          lastModified: stats.mtime
-        });
+        for (const entry of entries) {
+          const fullPath = path.join(dirPath, entry.name);
+          
+          if (entry.isDirectory()) {
+            await scanDirectory(fullPath);
+          } else if (entry.isFile() && (entry.name.endsWith('.bson') || entry.name.endsWith('.metadata.json'))) {
+            const stats = await stat(fullPath);
+            localFiles.push({
+              name: entry.name,
+              path: fullPath,
+              size: stats.size,
+              checksum: await calculateChecksum(fullPath),
+              lastModified: stats.mtime
+            });
+          }
+        }
       }
+
+      await scanDirectory(this.dumpPath);
+      logger.info('Scanned local files', { 
+        totalFiles: localFiles.length,
+        files: localFiles.map(f => f.name)
+      });
 
       return localFiles;
     } catch (error) {
