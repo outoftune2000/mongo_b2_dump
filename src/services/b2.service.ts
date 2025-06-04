@@ -3,14 +3,22 @@ import logger from '../utils/logger.util';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { createHash } from 'crypto';
+import { Readable } from 'stream';
 
 interface B2AuthResponse {
   accountId: string;
   authorizationToken: string;
-  apiUrl: string;
-  downloadUrl: string;
-  recommendedPartSize: number;
-  absoluteMinimumPartSize: number;
+  apiInfo: {
+    storageApi: {
+      apiUrl: string;
+      downloadUrl: string;
+      allowed: {
+        buckets: B2Bucket[];
+        capabilities: string[];
+        namePrefix: string | null;
+      };
+    };
+  };
 }
 
 interface B2File {
@@ -27,8 +35,8 @@ interface B2ListFilesResponse {
 }
 
 interface B2Bucket {
-  bucketId: string;
-  bucketName: string;
+  id: string;
+  name: string | null;
 }
 
 interface B2ListBucketsResponse {
@@ -48,6 +56,10 @@ interface B2StartLargeFileResponse {
   contentType: string;
 }
 
+interface B2DownloadAuthResponse {
+  authorizationToken: string;
+}
+
 export class B2Error extends Error {
   constructor(message: string, public code?: number) {
     super(message);
@@ -56,44 +68,78 @@ export class B2Error extends Error {
 }
 
 export class B2Service {
+  private applicationKeyId: string;
+  private applicationKey: string;
+  private bucketId: string;
   private authToken: string | null = null;
   private apiUrl: string | null = null;
   private downloadUrl: string | null = null;
-  private bucketId: string | null = null;
   private readonly CHUNK_SIZE = 100 * 1024 * 1024; // 100MB chunks
+  private readonly maxRetries: number = 3;
+  private readonly retryDelay: number = 1000;
 
-  constructor(
-    private readonly applicationKeyId: string,
-    private readonly applicationKey: string,
-    private readonly bucketName: string,
-    private readonly maxRetries: number = 3,
-    private readonly retryDelay: number = 1000
-  ) {}
+  constructor() {
+    this.applicationKeyId = process.env.B2_KEY_ID || '';
+    this.applicationKey = process.env.B2_KEY || '';
+    this.bucketId = process.env.B2_BUCKET_ID || '';
+
+    // Debug logging in constructor
+    logger.info('B2Service initialized with:', {
+      keyIdLength: this.applicationKeyId.length,
+      keyLength: this.applicationKey.length,
+      bucketId: this.bucketId,
+      envVars: {
+        B2_KEY_ID: process.env.B2_KEY_ID ? 'set' : 'not set',
+        B2_KEY: process.env.B2_KEY ? 'set' : 'not set',
+        B2_BUCKET_ID: process.env.B2_BUCKET_ID ? 'set' : 'not set'
+      }
+    });
+  }
 
   async authenticate(): Promise<void> {
     try {
-      const authString = Buffer.from(`${this.applicationKeyId}:${this.applicationKey}`).toString('base64');
-      
-      const response = await axios.get<B2AuthResponse>(
-        'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
-        {
-          headers: {
-            'Authorization': `Basic ${authString}`
-          }
+      logger.info('Attempting B2 authentication with:', {
+        keyIdLength: this.applicationKeyId.length,
+        keyLength: this.applicationKey.length,
+        bucketId: this.bucketId,
+        envVars: {
+          B2_KEY_ID: process.env.B2_KEY_ID ? 'set' : 'not set',
+          B2_KEY: process.env.B2_KEY ? 'set' : 'not set',
+          B2_BUCKET_ID: process.env.B2_BUCKET_ID ? 'set' : 'not set'
         }
-      );
+      });
 
-      const { authorizationToken, apiUrl, downloadUrl } = response.data;
+      if (!this.applicationKeyId || !this.applicationKey) {
+        throw new Error('B2 credentials not configured');
+      }
+
+      // Use the exact same logic as test_upload.js
+      const auth = Buffer.from(`${this.applicationKeyId}:${this.applicationKey}`).toString('base64');
+      const authRes = await axios.get('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
+        headers: { 'Authorization': `Basic ${auth}` }
+      });
+      const { authorizationToken, apiUrl, downloadUrl } = authRes.data;
       this.authToken = authorizationToken;
       this.apiUrl = apiUrl;
       this.downloadUrl = downloadUrl;
 
-      // Get bucket ID after authentication
-      await this.getBucketId();
-
-      logger.info('Successfully authenticated with B2');
+      logger.info('Successfully authenticated with B2', {
+        apiUrl: this.apiUrl,
+        downloadUrl: this.downloadUrl,
+        bucketId: this.bucketId
+      });
     } catch (error) {
-      logger.error('Failed to authenticate with B2', { error });
+      logger.error('Failed to authenticate with B2', {
+        error: typeof error === 'object' && error !== null && 'response' in error ? (error as any).response?.data : error,
+        keyIdLength: this.applicationKeyId.length,
+        keyLength: this.applicationKey.length,
+        bucketId: this.bucketId,
+        envVars: {
+          B2_KEY_ID: process.env.B2_KEY_ID ? 'set' : 'not set',
+          B2_KEY: process.env.B2_KEY ? 'set' : 'not set',
+          B2_BUCKET_ID: process.env.B2_BUCKET_ID ? 'set' : 'not set'
+        }
+      });
       throw new B2Error(
         error instanceof Error ? error.message : 'Failed to authenticate with B2'
       );
@@ -113,14 +159,12 @@ export class B2Service {
       );
 
       const bucket = response.data.buckets.find(
-        (b) => b.bucketName === this.bucketName
+        (b) => b.id === this.bucketId
       );
 
       if (!bucket) {
-        throw new B2Error(`Bucket ${this.bucketName} not found`);
+        throw new B2Error(`Bucket with ID ${this.bucketId} not found`);
       }
-
-      this.bucketId = bucket.bucketId;
     } catch (error) {
       logger.error('Failed to get bucket ID', { error });
       throw new B2Error(
@@ -369,5 +413,84 @@ export class B2Service {
       throw new B2Error('Not authenticated with B2');
     }
     return this.downloadUrl;
+  }
+
+  /**
+   * Gets a download authorization token for a private bucket
+   */
+  private async getDownloadAuthorization(fileNamePrefix: string, validDurationInSeconds = 600): Promise<string> {
+    try {
+      const response = await axios.post<B2DownloadAuthResponse>(
+        `${this.getApiUrl()}/b2api/v2/b2_get_download_authorization`,
+        {
+          bucketId: this.bucketId,
+          fileNamePrefix,
+          validDurationInSeconds
+        },
+        {
+          headers: this.getAuthHeaders()
+        }
+      );
+      return response.data.authorizationToken;
+    } catch (error) {
+      logger.error('Failed to get download authorization', { error });
+      throw new B2Error(
+        error instanceof Error ? error.message : 'Failed to get download authorization'
+      );
+    }
+  }
+
+  /**
+   * Downloads a file from B2
+   */
+  async downloadFile(fileName: string): Promise<Readable> {
+    try {
+      const downloadToken = await this.getDownloadAuthorization(fileName);
+      const url = `${this.getDownloadUrl()}/file/${this.bucketId}/${fileName}?Authorization=${downloadToken}`;
+      
+      const response = await axios.get(url, {
+        responseType: 'stream'
+      });
+      
+      return response.data;
+    } catch (error: unknown) {
+      logger.error('Failed to download file', { 
+        fileName,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        response: error instanceof Error && 'response' in error ? (error as any).response?.data : undefined
+      });
+      throw new B2Error(
+        error instanceof Error ? error.message : 'Failed to download file from B2'
+      );
+    }
+  }
+
+  /**
+   * Downloads a byte range from a B2 file
+   */
+  async downloadFileRange(fileName: string, start: number, end: number): Promise<Buffer> {
+    try {
+      const downloadToken = await this.getDownloadAuthorization(fileName);
+      const url = `${this.getDownloadUrl()}/file/${this.bucketId}/${fileName}?Authorization=${downloadToken}`;
+      
+      const response = await axios.get(url, {
+        headers: {
+          Range: `bytes=${start}-${end}`
+        },
+        responseType: 'arraybuffer'
+      });
+      
+      return Buffer.from(response.data);
+    } catch (error: unknown) {
+      logger.error('Failed to download file range', { 
+        fileName,
+        range: `${start}-${end}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        response: error instanceof Error && 'response' in error ? (error as any).response?.data : undefined
+      });
+      throw new B2Error(
+        error instanceof Error ? error.message : 'Failed to download file range from B2'
+      );
+    }
   }
 } 

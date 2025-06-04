@@ -1,7 +1,22 @@
 version: '3.8'
 
 services:
-  mongodb:
+  backup:
+    build: .
+    environment:
+      - B2_KEY_ID=your_key_id_here
+      - B2_KEY=your_application_key_here
+      - B2_BUCKET_NAME=your_bucket_name_here
+      - MONGO_CONTAINER_NAME=mongo
+      - MONGO_URI=mongodb://localhost:27017
+      - BACKUP_PATH=/backup
+    volumes:
+      - ./backups:/backup
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  mongo:
     image: mongo:latest
     container_name: ${MONGO_CONTAINER_NAME}
     environment:
@@ -12,25 +27,6 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
-    networks:
-      - backup_network
-
-  backup_service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: backup_service
-    environment:
-      - B2_KEY_ID=${B2_KEY_ID}
-      - B2_APPLICATION_KEY=${B2_APPLICATION_KEY}
-      - B2_BUCKET_NAME=${B2_BUCKET_NAME}
-      - MONGO_CONTAINER_NAME=${MONGO_CONTAINER_NAME}
-      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@${MONGO_CONTAINER_NAME}:27017/${MONGO_DATABASE}?authMechanism=SCRAM-SHA-256&authSource=admin
-      - BACKUP_DIR=/backups
-    volumes:
-      - ./backups:/backups
-    depends_on:
-      - mongodb
     networks:
       - backup_network
 
