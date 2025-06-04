@@ -114,7 +114,7 @@ export class BackupService {
       const localFiles: LocalFile[] = [];
 
       for (const file of files) {
-        if (!file.endsWith('.gz')) continue;
+        if (!file.endsWith('.bson')) continue;
 
         const filePath = path.join(this.dumpPath, file);
         const stats = await stat(filePath);
