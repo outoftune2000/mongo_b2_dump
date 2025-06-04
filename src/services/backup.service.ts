@@ -1,10 +1,12 @@
 import { MongoService } from './mongo.service';
 import { B2Service } from './b2.service';
 import { calculateChecksum } from '../utils/file.util';
+import { convertBsonToJsonlChunks } from '../utils/bson.util';
 import logger from '../utils/logger.util';
 import { stat } from 'fs/promises';
 import { readdir } from 'fs/promises';
 import path from 'path';
+import { mkdir } from 'fs/promises';
 
 export class BackupError extends Error {
   constructor(message: string, public code?: number) {
@@ -74,16 +76,37 @@ export class BackupService {
       // Get list of files to backup
       const newFiles = await this.getNewFiles();
 
+      // Create a temporary directory for JSONL chunks
+      const tempDir = path.join(this.dumpPath, 'temp_jsonl');
+      await mkdir(tempDir, { recursive: true });
+
       // Upload each new file to B2
       for (const file of newFiles) {
         try {
-          await this.b2Service.uploadFile(file.path, file.name);
-          logger.info('Successfully uploaded file to B2', {
-            fileName: file.name,
-            filePath: file.path
-          });
+          if (file.name.endsWith('.bson')) {
+            // Convert BSON to JSONL chunks
+            const chunkPaths = await convertBsonToJsonlChunks({
+              inputPath: file.path,
+              outputDir: tempDir,
+              chunkSize: 10 * 1024 * 1024 // 10MB chunks
+            });
+
+            // Upload each chunk
+            for (const chunkPath of chunkPaths) {
+              const chunkName = path.basename(chunkPath);
+              const remotePath = path.join(path.basename(file.name, '.bson'), chunkName);
+              await this.b2Service.uploadFile(chunkPath, remotePath);
+              logger.info('Successfully uploaded JSONL chunk to B2', {
+                chunkName,
+                remotePath
+              });
+            }
+          } else {
+            // Skip metadata files
+            logger.info('Skipping metadata file', { fileName: file.name });
+          }
         } catch (error) {
-          logger.error('Failed to upload file to B2', {
+          logger.error('Failed to process file', {
             fileName: file.name,
             error
           });
@@ -92,7 +115,7 @@ export class BackupService {
       }
 
       logger.info('Completed incremental backup', {
-        filesUploaded: newFiles.length
+        filesProcessed: newFiles.length
       });
     } catch (error) {
       logger.error('Failed to perform incremental backup', { error });
@@ -119,7 +142,7 @@ export class BackupService {
           
           if (entry.isDirectory()) {
             await scanDirectory(fullPath);
-          } else if (entry.isFile() && (entry.name.endsWith('.bson') || entry.name.endsWith('.metadata.json'))) {
+          } else if (entry.isFile() && entry.name.endsWith('.bson')) {
             const stats = await stat(fullPath);
             localFiles.push({
               name: entry.name,
