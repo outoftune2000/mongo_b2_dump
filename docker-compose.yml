@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: ${MONGO_CONTAINER_NAME}
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - backup_network
+
+  backup_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backup_service
+    environment:
+      - B2_KEY_ID=${B2_KEY_ID}
+      - B2_APPLICATION_KEY=${B2_APPLICATION_KEY}
+      - B2_BUCKET_NAME=${B2_BUCKET_NAME}
+      - MONGO_CONTAINER_NAME=${MONGO_CONTAINER_NAME}
+      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@${MONGO_CONTAINER_NAME}:27017/${MONGO_DATABASE}?authMechanism=SCRAM-SHA-256&authSource=admin
+      - BACKUP_DIR=/backups
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      - mongodb
+    networks:
+      - backup_network
+
+volumes:
+  mongodb_data:
+
+networks:
+  backup_network:
+    driver: bridge 

@@ -1,0 +1,35 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+npm-debug.log
+
+# Build output
+dist
+build
+
+# Test files
+coverage
+*.test.ts
+*.spec.ts
+
+# Development files
+.vscode
+.idea
+*.md
+!README.md
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Backup files
+backup/
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore 
