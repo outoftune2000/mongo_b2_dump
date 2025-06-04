@@ -38,6 +38,10 @@ export class MongoService {
       const copyCommand = `docker cp ${this.containerName}:/dump ${outputDir}`;
       await execAsync(copyCommand);
 
+      // Print the file structure of the dump directory
+      const { stdout: fileStructure } = await execAsync(`find ${outputDir} -type f | sort`);
+      logger.info('Dump file structure:', { fileStructure });
+
       // Clean up the dump in the container
       try {
         const cleanupCommand = `docker exec ${this.containerName} rm -rf /dump`;
