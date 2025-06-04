@@ -111,12 +111,17 @@ export class BackupService {
   private async getLocalFiles(): Promise<LocalFile[]> {
     try {
       const localFiles: LocalFile[] = [];
+      const processedPaths = new Set<string>();
       
       async function scanDirectory(dirPath: string) {
         const entries = await readdir(dirPath, { withFileTypes: true });
         
         for (const entry of entries) {
           const fullPath = path.join(dirPath, entry.name);
+          
+          // Skip if we've already processed this path
+          if (processedPaths.has(fullPath)) continue;
+          processedPaths.add(fullPath);
           
           if (entry.isDirectory()) {
             await scanDirectory(fullPath);
@@ -134,9 +139,12 @@ export class BackupService {
       }
 
       await scanDirectory(this.dumpPath);
+      
+      // Log unique files only
+      const uniqueFiles = Array.from(new Set(localFiles.map(f => f.name)));
       logger.info('Scanned local files', { 
-        totalFiles: localFiles.length,
-        files: localFiles.map(f => f.name)
+        totalFiles: uniqueFiles.length,
+        files: uniqueFiles
       });
 
       return localFiles;
