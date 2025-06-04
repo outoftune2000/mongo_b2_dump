@@ -276,17 +276,29 @@ export class B2Service {
           );
 
           const { uploadUrl, authorizationToken } = uploadUrlResponse.data;
-          const fileStream = createReadStream(filePath);
           
+          // Calculate SHA1 hash first
+          const fileBuffer = await new Promise<Buffer>((resolve, reject) => {
+            const chunks: Buffer[] = [];
+            const stream = createReadStream(filePath);
+            stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+            stream.on('end', () => resolve(Buffer.concat(chunks)));
+            stream.on('error', reject);
+          });
+          
+          const sha1 = createHash('sha1').update(fileBuffer).digest('hex');
+          
+          // Now upload with the hash
           const response = await axios.post<B2File>(
             uploadUrl,
-            fileStream,
+            fileBuffer,
             {
               headers: {
                 Authorization: authorizationToken,
                 'Content-Type': 'b2/x-auto',
                 'Content-Length': fileSize.toString(),
-                'X-Bz-File-Name': fileName
+                'X-Bz-File-Name': fileName,
+                'X-Bz-Content-Sha1': sha1
               }
             }
           );
