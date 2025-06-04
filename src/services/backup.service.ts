@@ -43,18 +43,12 @@ export class BackupService {
       // Get list of remote files from B2
       const remoteFiles = await this.b2Service.listExistingFiles();
 
-      // Find files that don't exist in B2 or have different checksums
+      // Find files that don't exist in B2
       const newFiles = localFiles.filter(localFile => {
         const remoteFile = remoteFiles.find(
           remote => remote.fileName === localFile.name
         );
-
-        if (!remoteFile) {
-          return true; // File doesn't exist in B2
-        }
-
-        // Check if file has been modified
-        return remoteFile.contentSha1 !== localFile.checksum;
+        return !remoteFile; // File doesn't exist in B2
       });
 
       logger.info('Found new files to backup', {
@@ -131,7 +125,7 @@ export class BackupService {
               name: entry.name,
               path: fullPath,
               size: stats.size,
-              checksum: await calculateChecksum(fullPath),
+              checksum: '', // Skip checksum calculation
               lastModified: stats.mtime
             });
           }
