@@ -47,6 +47,8 @@ export class MongoService {
         let currentCollection = '';
         let documentsProcessed = 0;
         let startTime = Date.now();
+        let collectionsCompleted = 0;
+        let totalCollections = 0;
 
         child.stdout.on('data', (data) => {
           const output = data.toString();
@@ -54,26 +56,37 @@ export class MongoService {
           if (output.includes('writing')) {
             currentCollection = output.split('writing')[1].trim();
             logger.info(`Starting dump of collection: ${currentCollection}`);
+            totalCollections++;
           } else if (output.includes('done dumping')) {
             const match = output.match(/done dumping .* \((\d+) documents\)/);
             if (match) {
               documentsProcessed = parseInt(match[1], 10);
+              collectionsCompleted++;
               const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
-              logger.info(`Completed dumping ${currentCollection}: ${documentsProcessed} documents in ${elapsedTime}s`);
+              logger.info(`Completed dumping ${currentCollection}: ${documentsProcessed} documents in ${elapsedTime}s (${collectionsCompleted}/${totalCollections} collections)`);
             }
           }
         });
 
         child.stderr.on('data', (data) => {
-          const error = data.toString();
-          // Only log errors, don't store in memory
-          logger.error('Mongodump error:', { error });
+          const output = data.toString();
+          // Handle progress bars and status updates
+          if (output.includes('[') && output.includes('%')) {
+            // This is a progress bar, log as info
+            logger.info('Dump progress:', { progress: output.trim() });
+          } else if (output.includes('writing') || output.includes('done dumping')) {
+            // These are status updates, log as info
+            logger.info('Dump status:', { status: output.trim() });
+          } else {
+            // Only log actual errors as errors
+            logger.error('Mongodump error:', { error: output });
+          }
         });
 
         child.on('close', (code) => {
           if (code === 0) {
             const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
-            logger.info(`Mongodump completed successfully in ${totalTime}s`);
+            logger.info(`Mongodump completed successfully in ${totalTime}s (${collectionsCompleted}/${totalCollections} collections)`);
             resolve();
           } else {
             reject(new Error(`mongodump failed with code ${code}`));
