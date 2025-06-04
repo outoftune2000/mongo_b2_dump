@@ -1,7 +1,6 @@
 import { MongoService } from './services/mongo.service';
 import { B2Service } from './services/b2.service';
 import { BackupService } from './services/backup.service';
-import { rotateBackups } from './utils/file.util';
 import logger from './utils/logger.util';
 import { BackupError } from './utils/errors';
 
@@ -48,13 +47,6 @@ async function main() {
     // Perform backup
     await backupService.performIncrementalBackup();
     logger.info('Successfully completed backup');
-
-    // Rotate old backups
-    await rotateBackups(process.env.BACKUP_PATH || '/backup', {
-      maxFiles: parseInt(process.env.MAX_BACKUP_FILES || '30'),
-      maxAgeDays: parseInt(process.env.MAX_BACKUP_AGE_DAYS || '30')
-    });
-    logger.info('Successfully rotated backups');
 
   } catch (error) {
     logger.error('Backup failed', { error });

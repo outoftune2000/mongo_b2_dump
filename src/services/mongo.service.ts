@@ -39,8 +39,29 @@ export class MongoService {
       await execAsync(copyCommand);
 
       // Clean up the dump in the container
-      const cleanupCommand = `docker exec ${this.containerName} rm -rf /dump`;
-      await execAsync(cleanupCommand);
+      try {
+        const cleanupCommand = `docker exec ${this.containerName} rm -rf /dump`;
+        await execAsync(cleanupCommand);
+        
+        // Verify cleanup was successful
+        const verifyCommand = `docker exec ${this.containerName} test -d /dump && echo "exists" || echo "not exists"`;
+        const { stdout } = await execAsync(verifyCommand);
+        
+        if (stdout.trim() === "exists") {
+          logger.warn('Cleanup verification failed: dump directory still exists in container');
+          // Try one more time with force
+          const forceCleanupCommand = `docker exec ${this.containerName} rm -rf /dump/* /dump/.[!.]* 2>/dev/null || true`;
+          await execAsync(forceCleanupCommand);
+        } else {
+          logger.info('Successfully cleaned up dump directory in MongoDB container');
+        }
+      } catch (cleanupError) {
+        logger.error('Failed to clean up dump directory in MongoDB container', { 
+          error: cleanupError,
+          container: this.containerName 
+        });
+        // Don't throw here, as the backup was successful
+      }
 
       logger.info('Successfully created MongoDB dump', {
         container: this.containerName,
