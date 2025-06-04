@@ -4,6 +4,8 @@ import { B2Service } from './services/b2.service';
 import { BackupService } from './services/backup.service';
 import logger from './utils/logger.util';
 import { BackupError } from './utils/errors';
+import { ensureDirectoryExists } from './utils/file.util';
+import path from 'path';
 
 // Debug logging for environment variables
 logger.info('Environment variables:', {
@@ -13,6 +15,7 @@ logger.info('Environment variables:', {
 });
 
 const BACKUP_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
+const DEFAULT_BACKUP_PATH = path.join(process.cwd(), 'backups');
 
 async function performBackup(
   mongoService: MongoService,
@@ -38,11 +41,16 @@ async function performBackup(
 }
 
 async function main() {
+  // Ensure backup directory exists
+  const backupPath = process.env.BACKUP_PATH || DEFAULT_BACKUP_PATH;
+  await ensureDirectoryExists(backupPath);
+  logger.info('Using backup directory', { backupPath });
+
   // Initialize services
   const mongoService = new MongoService(
-    process.env.MONGO_CONTAINER_NAME || '',
-    process.env.MONGO_URI || '',
-    process.env.BACKUP_PATH || ''
+    process.env.MONGO_CONTAINER_NAME || 'mongo',
+    process.env.MONGO_URI || 'mongodb://localhost:27017',
+    backupPath
   );
 
   const b2Service = new B2Service(
@@ -54,7 +62,7 @@ async function main() {
   const backupService = new BackupService(
     mongoService,
     b2Service,
-    process.env.BACKUP_PATH || ''
+    backupPath
   );
 
   // Handle graceful shutdown
