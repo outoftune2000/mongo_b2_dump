@@ -6,3 +6,4 @@ dist/
 .env.test.local
 .env.production.local
 test_upload.js
+logs/
