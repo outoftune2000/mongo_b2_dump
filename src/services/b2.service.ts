@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import logger from '../utils/logger.util';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
@@ -75,8 +75,9 @@ export class B2Service {
   private apiUrl: string | null = null;
   private downloadUrl: string | null = null;
   private readonly CHUNK_SIZE = 100 * 1024 * 1024; // 100MB chunks
-  private readonly maxRetries: number = 3;
+  private readonly maxRetries: number = 5; // Increased from 3 to 5
   private readonly retryDelay: number = 1000;
+  private readonly maxBackoffDelay: number = 30000; // 30 seconds
 
   constructor(
     applicationKeyId: string,
@@ -250,9 +251,110 @@ export class B2Service {
     );
   }
 
+  private formatErrorData(data: any): string {
+    if (!data) return 'No error data';
+    
+    // If it's a string, return it directly
+    if (typeof data === 'string') return data;
+    
+    // If it's an object, extract the most relevant information
+    if (typeof data === 'object') {
+      const relevantInfo: Record<string, any> = {
+        code: data.code,
+        status: data.status,
+        message: data.message,
+        // Only include the first few items if it's an array
+        data: Array.isArray(data.data) ? data.data.slice(0, 3) : data.data
+      };
+      
+      // Remove undefined/null values
+      Object.keys(relevantInfo).forEach(key => 
+        relevantInfo[key] === undefined && delete relevantInfo[key]
+      );
+      
+      return JSON.stringify(relevantInfo, null, 2);
+    }
+    
+    return 'Unknown error format';
+  }
+
+  private async handleUploadError(error: unknown, attempt: number, fileName: string): Promise<boolean> {
+    if (error instanceof AxiosError) {
+      const status = error.response?.status;
+      const data = error.response?.data;
+      
+      // Format error data to be more concise
+      const formattedError = this.formatErrorData(data);
+      
+      logger.error('B2 upload error', {
+        fileName,
+        attempt,
+        status,
+        error: formattedError,
+        // Only log essential headers
+        headers: error.response?.headers ? {
+          'content-type': error.response.headers['content-type'],
+          'x-bz-upload-timestamp': error.response.headers['x-bz-upload-timestamp']
+        } : undefined
+      });
+
+      // Handle specific error cases
+      if (status === 400) {
+        if (data?.code === 'bad_request') {
+          logger.error('Invalid request parameters', { 
+            fileName, 
+            error: formattedError 
+          });
+          return false; // Don't retry bad requests
+        }
+        if (data?.code === 'expired_auth_token') {
+          logger.info('Auth token expired, re-authenticating...');
+          await this.authenticate();
+          return true; // Retry after re-authentication
+        }
+      }
+      
+      if (status === 401) {
+        logger.info('Unauthorized, re-authenticating...');
+        await this.authenticate();
+        return true; // Retry after re-authentication
+      }
+
+      if (status === 429) {
+        logger.warn('Rate limited, will retry with backoff');
+        return true; // Retry with backoff
+      }
+
+      // For server errors (5xx), always retry
+      if (status && status >= 500) {
+        logger.warn('Server error, will retry');
+        return true;
+      }
+    }
+
+    // For network errors or unknown errors, retry
+    return true;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async uploadFile(filePath: string, fileName: string): Promise<B2File> {
     if (!this.isAuthenticated()) {
       throw new B2Error('Not authenticated with B2');
+    }
+
+    // Check if file already exists
+    const exists = await this.fileExists(fileName);
+    if (exists) {
+      logger.info('File already exists in B2, skipping upload', { fileName });
+      // Return the existing file info
+      const files = await this.listExistingFiles(fileName);
+      const existingFile = files.find(file => file.fileName === fileName);
+      if (existingFile) {
+        return existingFile;
+      }
     }
 
     let retries = 0;
@@ -262,6 +364,12 @@ export class B2Service {
       try {
         const fileStats = await stat(filePath);
         const fileSize = fileStats.size;
+
+        logger.info('Starting file upload', {
+          fileName,
+          fileSize,
+          attempt: retries + 1
+        });
 
         // For small files, use simple upload
         if (fileSize <= this.CHUNK_SIZE) {
@@ -303,6 +411,12 @@ export class B2Service {
             }
           );
 
+          logger.info('Successfully uploaded file', {
+            fileName,
+            fileSize,
+            fileId: response.data.fileId
+          });
+
           return response.data;
         }
 
@@ -338,11 +452,23 @@ export class B2Service {
           );
           
           partSha1Array[partNumber - 1] = partResponse.contentSha1;
-          logger.info(`Uploaded part ${partNumber} of ${totalParts}`);
+          logger.info(`Uploaded part ${partNumber} of ${totalParts}`, {
+            fileName,
+            partNumber,
+            totalParts,
+            partSize: chunk.length
+          });
         }
 
         await this.finishLargeFile(fileId, partSha1Array);
         
+        logger.info('Successfully uploaded large file', {
+          fileName,
+          fileSize,
+          fileId,
+          totalParts
+        });
+
         return {
           fileName,
           fileId,
@@ -352,10 +478,28 @@ export class B2Service {
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Unknown error');
-        logger.warn(`Upload attempt ${retries + 1} failed`, { error: lastError });
+        
+        // Check if we should retry
+        const shouldRetry = await this.handleUploadError(error, retries + 1, fileName);
+        
+        if (!shouldRetry) {
+          throw new B2Error(`Upload failed and should not be retried: ${lastError.message}`);
+        }
 
         if (retries < this.maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, this.retryDelay * Math.pow(2, retries)));
+          // Calculate exponential backoff with jitter
+          const backoffDelay = Math.min(
+            this.retryDelay * Math.pow(2, retries) * (0.5 + Math.random()),
+            this.maxBackoffDelay
+          );
+          
+          logger.warn(`Upload attempt ${retries + 1} failed, retrying in ${Math.round(backoffDelay/1000)}s`, {
+            fileName,
+            error: lastError.message,
+            nextAttempt: retries + 2
+          });
+
+          await this.sleep(backoffDelay);
           retries++;
         } else {
           break;
@@ -386,7 +530,8 @@ export class B2Service {
               bucketId: this.bucketId,
               prefix,
               startFileName: nextFileName,
-              maxFileCount: 1000
+              maxFileCount: 1000,
+              delimiter: '/' // Add delimiter to handle folders
             }
           }
         );
@@ -402,6 +547,23 @@ export class B2Service {
     } while (nextFileName);
 
     return files;
+  }
+
+  /**
+   * Checks if a file already exists in the bucket
+   * @param fileName The name of the file to check
+   * @returns true if the file exists, false otherwise
+   */
+  async fileExists(fileName: string): Promise<boolean> {
+    try {
+      const files = await this.listExistingFiles(fileName);
+      return files.some(file => file.fileName === fileName);
+    } catch (error) {
+      logger.error('Failed to check if file exists', { fileName, error });
+      throw new B2Error(
+        error instanceof Error ? error.message : 'Failed to check if file exists'
+      );
+    }
   }
 
   isAuthenticated(): boolean {
