@@ -3,8 +3,8 @@ import { B2Service } from './b2.service';
 import { calculateChecksum } from '../utils/file.util';
 import { convertBsonToJsonlChunks } from '../utils/bson.util';
 import logger from '../utils/logger.util';
-import { stat } from 'fs/promises';
-import { readdir } from 'fs/promises';
+import { stat, unlink } from 'fs/promises';
+import { readdir, rm } from 'fs/promises';
 import path from 'path';
 import { mkdir } from 'fs/promises';
 
@@ -131,6 +131,26 @@ export class BackupService {
       logger.info('Completed incremental backup', {
         filesProcessed: newFiles.length
       });
+
+      // Clean up the entire backups directory
+      try {
+        const entries = await readdir(this.dumpPath, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(this.dumpPath, entry.name);
+          if (entry.isDirectory()) {
+            await rm(fullPath, { recursive: true, force: true });
+          } else {
+            await unlink(fullPath);
+          }
+        }
+        logger.info('Cleaned up backups directory', { dumpPath: this.dumpPath });
+      } catch (error) {
+        logger.error('Failed to clean up backups directory', {
+          dumpPath: this.dumpPath,
+          error
+        });
+        // Don't throw here, as the backup was successful
+      }
     } catch (error) {
       logger.error('Failed to perform incremental backup', { error });
       throw new BackupError(

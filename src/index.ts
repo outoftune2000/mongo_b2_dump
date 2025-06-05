@@ -6,6 +6,7 @@ import logger from './utils/logger.util';
 import { BackupError } from './utils/errors';
 import { ensureDirectoryExists } from './utils/file.util';
 import path from 'path';
+import { readdir, rm, unlink } from 'fs/promises';
 
 // Debug logging for environment variables
 logger.info('Environment variables:', {
@@ -16,6 +17,26 @@ logger.info('Environment variables:', {
 
 const BACKUP_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
 const DEFAULT_BACKUP_PATH = path.join(process.cwd(), 'backups');
+
+async function cleanupBackupsDirectory(backupPath: string) {
+  try {
+    const entries = await readdir(backupPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(backupPath, entry.name);
+      if (entry.isDirectory()) {
+        await rm(fullPath, { recursive: true, force: true });
+      } else {
+        await unlink(fullPath);
+      }
+    }
+    logger.info('Cleaned up backups directory', { backupPath });
+  } catch (error) {
+    logger.error('Failed to clean up backups directory', {
+      backupPath,
+      error
+    });
+  }
+}
 
 async function performBackup(
   mongoService: MongoService,
@@ -69,7 +90,8 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, starting graceful shutdown`);
     try {
-      // Perform any cleanup here
+      // Clean up backups directory before exiting
+      await cleanupBackupsDirectory(backupPath);
       process.exit(0);
     } catch (error) {
       logger.error('Error during shutdown', { error });
@@ -95,8 +117,8 @@ async function main() {
   logger.info(`Backup service started. Next backup scheduled in ${BACKUP_INTERVAL_MS / (60 * 60 * 1000)} hours`);
 }
 
-// Run the application
-main().catch((error) => {
-  logger.error('Unhandled error', { error });
+// Run the main function
+main().catch(error => {
+  logger.error('Fatal error', { error });
   process.exit(1);
 }); 
