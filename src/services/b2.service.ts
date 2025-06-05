@@ -556,8 +556,20 @@ export class B2Service {
    */
   async fileExists(fileName: string): Promise<boolean> {
     try {
-      const files = await this.listExistingFiles(fileName);
-      return files.some(file => file.fileName === fileName);
+      // Get the directory path of the file
+      const fileDir = fileName.split('/').slice(0, -1).join('/');
+      const baseFileName = fileName.split('/').pop() || '';
+
+      // List files in the same directory
+      const files = await this.listExistingFiles(fileDir ? `${fileDir}/` : '');
+      
+      // Check for exact file match in the same directory
+      return files.some(file => {
+        const filePath = file.fileName;
+        const fileNameParts = filePath.split('/');
+        const existingFileName = fileNameParts[fileNameParts.length - 1];
+        return existingFileName === baseFileName;
+      });
     } catch (error) {
       logger.error('Failed to check if file exists', { fileName, error });
       throw new B2Error(

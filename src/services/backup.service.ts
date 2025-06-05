@@ -42,20 +42,32 @@ export class BackupService {
       // Get list of local dump files
       const localFiles = await this.getLocalFiles();
       
-      // Get list of remote files from B2
+      // Get list of remote files from B2 - single call
       const remoteFiles = await this.b2Service.listExistingFiles();
 
-      // Find files that don't exist in B2
+      // Create a Set of folder names from remote files for O(1) lookup
+      const remoteFolders = new Set<string>();
+      remoteFiles.forEach(remote => {
+        const parts = remote.fileName.split('/');
+        if (parts.length > 1) {
+          remoteFolders.add(parts[0]);
+        }
+      });
+
+      // Find files that don't exist in B2 and don't have a folder with the same name
       const newFiles = localFiles.filter(localFile => {
+        const baseName = path.basename(localFile.name, '.bson');
         const remoteFile = remoteFiles.find(
           remote => remote.fileName === localFile.name
         );
-        return !remoteFile; // File doesn't exist in B2
+        const hasFolder = remoteFolders.has(baseName);
+        return !remoteFile && !hasFolder; // File doesn't exist in B2 and no folder with same name
       });
 
       logger.info('Found new files to backup', {
         totalFiles: localFiles.length,
-        newFiles: newFiles.length
+        newFiles: newFiles.length,
+        remoteFolders: Array.from(remoteFolders)
       });
 
       return newFiles;

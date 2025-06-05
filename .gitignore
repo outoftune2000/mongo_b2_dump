@@ -7,3 +7,4 @@ dist/
 .env.production.local
 test_upload.js
 logs/
+scripts/
